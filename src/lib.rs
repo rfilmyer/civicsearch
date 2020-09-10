@@ -1,42 +1,44 @@
-use std::io::{self, Read, Seek};
-use std::fs::File;
+use std::io::{Read, Seek, Cursor};
 use std::collections::HashMap;
 use shapefile::Reader;
 use shapefile::dbase::FieldValue;
 use shapefile::Polygon;
 use geo::algorithm::contains::Contains;
-use zip::{ZipArchive};
+use zip::{ZipArchive, read::ZipFile};
 use std::path::Path;
 use std::ffi::OsStr;
-use tempfile::tempfile;
 
 use log::{debug, info};
 
 use thiserror::Error;
 
+/// Errors that can occur when reading TIGER shapefiles
 #[derive(Error, Debug)]
 pub enum TIGERShapefileError {
+
+    /// One of three expected files (`.shp`, `.dbf`, or `.shx`) is missing from the TIGER shapefile `.zip` archive
     #[error("required .{extension:} file not found in archive")]
     MissingFile {
         extension: String,
     },
     
+    /// There are multiple `.shp`, `.dbf`, or `.shx` files in the TIGER shapefile `.zip` archive (there should only be one of each)
     #[error("too many .{extension:} files in archive")]
     TooManyFiles {
         extension: String,
     },
 
+    /// There was an error of some kind in reading the TIGER shapefile `.zip` archive
     #[error("error reading zipfile")]
     ZipFile(#[from] zip::result::ZipError),
 
+    /// There was an error in processing or parsing the TIGER shapefile
     #[error("error processing shapefile")]
     InvalidShapefile(#[from] shapefile::Error),
 
+    /// There was some kind of IO error (likely in `.zip` extraction)
     #[error("IO Error")]
-    Io {
-        #[from]
-        source: io::Error,
-    }
+    Io(#[from] std::io::Error),
 }
 
 /// Checks if a point is in a shape.
@@ -131,25 +133,14 @@ pub fn extract_district_name(record: HashMap<String, FieldValue>) -> Option<Stri
     }
 }
 
-struct TIGERShapefileArchive<T> 
-where T: Read,
-{
-    shape_file:      T,
-    db_file:         T,
-    shapeindex_file: T,
+/// Stores the filenames of relevant data within a TIGER shapefile archive
+struct TIGERShapefileArchiveFilenames<'a> {
+    shp_filename: &'a str,
+    dbf_filename: &'a str,
+    shx_filename: &'a str,
 }
 
-fn copy_into_new_tempfile(mut old_file: impl io::Read) -> Result<File, io::Error> {
-    debug!("Creating tempfile");
-    let mut temp_file = tempfile()?;
-    debug!("Extracting zip file into temp file");
-    io::copy(&mut old_file, &mut temp_file)?;
-    debug!("Copy complete");
-    temp_file.seek(io::SeekFrom::Start(0))?;
-    Ok(temp_file)
-}
-
-
+/// 
 fn find_file_in_zipfile_by_extension<'a, R>(zip_archive: &'a ZipArchive<R>, extension: &str) -> Result<Option<&'a str>, TIGERShapefileError> 
     where R: Read + Seek,
 {
@@ -169,12 +160,13 @@ fn find_file_in_zipfile_by_extension<'a, R>(zip_archive: &'a ZipArchive<R>, exte
     }
 }
 
-struct TIGERShapefileArchiveFilenames<'a> {
-    shp_filename: &'a str,
-    dbf_filename: &'a str,
-    shx_filename: &'a str,
-}
-
+/// Searches in the zipped TIGER shapefile for relevant files by extension
+/// 
+/// There are three files we need from the zipped TIGER shapefile - 
+/// (cf [section 2.2.1 of the TIGER Shapefile technical document](https://www2.census.gov/geo/pdfs/maps-data/data/tiger/tgrshp2019/TGRSHP2019_TechDoc.pdf))
+/// * .shp - the feature geometry
+/// * .shx - the index of the feature geometry
+/// * .dbf - the tabular attribute information
 fn get_shapefile_names_from_tiger_zipfile<R>(zip_archive: &ZipArchive<R>) -> Result<TIGERShapefileArchiveFilenames, TIGERShapefileError> 
     where R: Read + Seek,
 {
@@ -188,7 +180,23 @@ fn get_shapefile_names_from_tiger_zipfile<R>(zip_archive: &ZipArchive<R>) -> Res
     })
 }
 
-fn extract_shapefiles<'a, R: 'a>(zip_archive: ZipArchive<R>) -> Result<TIGERShapefileArchive<impl Read>, TIGERShapefileError>
+/// Represents the actual files (or file-like objects) from a zipped TIGER shapefile
+struct TIGERShapefileArchive<T> 
+where T: Read,
+{
+    shape_file:      T,
+    db_file:         T,
+    shapeindex_file: T,
+}
+
+fn extract_file_in_memory(mut zip_file: ZipFile) -> Result<Cursor<Vec<u8>>, TIGERShapefileError> 
+{
+    let mut output_buffer = Vec::new();
+    zip_file.read_to_end(&mut output_buffer)?;
+    Ok(Cursor::new(output_buffer))
+}
+
+fn extract_shapefiles<'a, R: 'a>(zip_archive: ZipArchive<R>) -> Result<TIGERShapefileArchive<Cursor<Vec<u8>>>, TIGERShapefileError>
     where R: Clone + Read + Seek,
 {
     info!("Checking for Files in Archive");
@@ -196,9 +204,9 @@ fn extract_shapefiles<'a, R: 'a>(zip_archive: ZipArchive<R>) -> Result<TIGERShap
 
     Ok(
         TIGERShapefileArchive {
-            shape_file:      copy_into_new_tempfile(zip_archive.clone().by_name(shapefile_names.shp_filename)?)?,
-            db_file:         copy_into_new_tempfile(zip_archive.clone().by_name(shapefile_names.dbf_filename)?)?,
-            shapeindex_file: copy_into_new_tempfile(zip_archive.clone().by_name(shapefile_names.shx_filename)?)?,
+            shape_file:      extract_file_in_memory(zip_archive.clone().by_name(shapefile_names.shp_filename)?)?,
+            db_file:         extract_file_in_memory(zip_archive.clone().by_name(shapefile_names.dbf_filename)?)?,
+            shapeindex_file: extract_file_in_memory(zip_archive.clone().by_name(shapefile_names.shx_filename)?)?,
         }
     )
 }
@@ -206,7 +214,7 @@ fn extract_shapefiles<'a, R: 'a>(zip_archive: ZipArchive<R>) -> Result<TIGERShap
 
 /// Reads a zip archive (a `.zip` file) from TIGER and returns a `shapefile::Reader` to be used for further munging.
 /// 
-/// TIGER shapefiles come in zip archives with a standard format.  
+/// TIGER shapefiles come in zip archives with a standard format (cf [section 2.2.1 of the TIGER Shapefile technical document](https://www2.census.gov/geo/pdfs/maps-data/data/tiger/tgrshp2019/TGRSHP2019_TechDoc.pdf))  
 /// For example, take the 2019 Massachusetts State Assembly district file `tl_2019_25_sldl.zip`:
 /// 
 /// ```text
@@ -223,13 +231,15 @@ fn extract_shapefiles<'a, R: 'a>(zip_archive: ZipArchive<R>) -> Result<TIGERShap
 /// so it is probably more user-friendly to look for a single file, versus asking for three.
 /// This function builds a `shapefile::Reader` from a zip file containing those three files.
 /// 
-/// # Undefined Behavior
-/// The function expects a zipfile with exactly one `.shp` file, one `.dbf` file, and one `.shx` file,
-/// as is typical for TIGER shapefiles. It is unclear what happens if there are multiple of those files in an archive.
 /// 
 /// # Errors
+/// This function will return an error if: 
+/// * One of the 3 required files is not present in the `.zip` archive
+/// * There are multiple `.shp`, `.dbf`, or `.shx` files in the archive
+/// * There is an error opening the zip file (see errors in the `zip` crate for more details)
+/// * There is an error parsing the `.shp`, `.dbf`, or `.shx` files (see `shapefile::Error` for more details)
 /// 
-pub fn shapefile_reader_from_zip_archive<R>(zip_archive: ZipArchive<R>) -> Result<Reader<impl io::Read>, TIGERShapefileError> 
+pub fn shapefile_reader_from_zip_archive<R>(zip_archive: ZipArchive<R>) -> Result<Reader<impl Read>, TIGERShapefileError> 
     where R: Clone + Read + Seek,
 {
     let tiger_shapefile = extract_shapefiles(zip_archive)?;
