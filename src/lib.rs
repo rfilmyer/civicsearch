@@ -1,4 +1,4 @@
-use std::io::{self, Seek};
+use std::io::{self, Read, Seek};
 use std::fs::File;
 use std::collections::HashMap;
 use shapefile::Reader;
@@ -6,9 +6,38 @@ use shapefile::dbase::FieldValue;
 use shapefile::Polygon;
 use geo::algorithm::contains::Contains;
 use zip::{ZipArchive};
+use std::path::Path;
 use std::ffi::OsStr;
 use tempfile::tempfile;
+
 use log::{debug, info};
+
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum TIGERShapefileError {
+    #[error("required .{extension:} file not found in archive")]
+    MissingFile {
+        extension: String,
+    },
+    
+    #[error("too many .{extension:} files in archive")]
+    TooManyFiles {
+        extension: String,
+    },
+
+    #[error("error reading zipfile")]
+    ZipFile(#[from] zip::result::ZipError),
+
+    #[error("error processing shapefile")]
+    InvalidShapefile(#[from] shapefile::Error),
+
+    #[error("IO Error")]
+    Io {
+        #[from]
+        source: io::Error,
+    }
+}
 
 /// Checks if a point is in a shape.
 /// 
@@ -103,7 +132,7 @@ pub fn extract_district_name(record: HashMap<String, FieldValue>) -> Option<Stri
 }
 
 struct TIGERShapefileArchive<T> 
-where T: io::Read,
+where T: Read,
 {
     shape_file:      T,
     db_file:         T,
@@ -120,47 +149,58 @@ fn copy_into_new_tempfile(mut old_file: impl io::Read) -> Result<File, io::Error
     Ok(temp_file)
 }
 
-fn extract_shapefiles<'a, R: 'a>(mut zip_archive: ZipArchive<R>) -> Result<TIGERShapefileArchive<File>, io::Error>
-    where R: io::Read + io::Seek,
-{
-    let mut shape_file = None; 
-    let mut db_file = None; 
-    let mut shapeindex_file = None;
 
-    info!("Opening Zip Archive");
-    for i in 0..zip_archive.len() {
-        let file = zip_archive.by_index(i)?;
-        let file_name = file.sanitized_name();
-        debug!("Found File {}", file_name.to_string_lossy());
-        let file_extension = file_name.extension()
-            .unwrap_or_else(|| { OsStr::new("") })
-            .to_str();
-        match file_extension {
-                Some("shp") => {
-                    info!("Extracting .shp into tempfile");
-                    shape_file = Some(copy_into_new_tempfile(file)?);
-                    debug!("Extracted .shp into tempfile");
-                }
-                Some("dbf") => {
-                    info!("Extracting .dbf into tempfile");
-                    db_file = Some(copy_into_new_tempfile(file)?);
-                    debug!("Extracted .dbf into tempfile");
-                }
-                Some("shx") => {
-                    info!("Extracting .shx into tempfile");
-                    shapeindex_file = Some(copy_into_new_tempfile(file)?);
-                    debug!("Extracted .shx into tempfile");
-                }
-                _ => {}
-            }
+fn find_file_in_zipfile_by_extension<'a, R>(zip_archive: &'a ZipArchive<R>, extension: &str) -> Result<Option<&'a str>, TIGERShapefileError> 
+    where R: Read + Seek,
+{
+    let filenames_with_extension = zip_archive.file_names()
+        .filter(|f| {
+            Path::new(f)
+                .extension()
+                .and_then(|x| { Some(OsStr::to_string_lossy(x)) })
+                .map_or(false, |x| { x == extension})
+        })
+        .collect::<Vec<&str>>();
+    
+    if filenames_with_extension.len() > 1 {
+        return Err(TIGERShapefileError::TooManyFiles { extension: String::from(extension) })
+    } else {
+        return Ok(filenames_with_extension.first().cloned())
     }
+}
+
+struct TIGERShapefileArchiveFilenames<'a> {
+    shp_filename: &'a str,
+    dbf_filename: &'a str,
+    shx_filename: &'a str,
+}
+
+fn get_shapefile_names_from_tiger_zipfile<R>(zip_archive: &ZipArchive<R>) -> Result<TIGERShapefileArchiveFilenames, TIGERShapefileError> 
+    where R: Read + Seek,
+{
+    Ok(TIGERShapefileArchiveFilenames{
+        shp_filename: find_file_in_zipfile_by_extension(zip_archive, "shp")?
+            .ok_or(TIGERShapefileError::MissingFile { extension: String::from("shp")})?,
+        dbf_filename: find_file_in_zipfile_by_extension(zip_archive, "dbf")?
+            .ok_or(TIGERShapefileError::MissingFile { extension: String::from("dbf")})?,
+        shx_filename: find_file_in_zipfile_by_extension(zip_archive, "shx")?
+        .ok_or(TIGERShapefileError::MissingFile { extension: String::from("shx")})?,
+    })
+}
+
+fn extract_shapefiles<'a, R: 'a>(zip_archive: ZipArchive<R>) -> Result<TIGERShapefileArchive<impl Read>, TIGERShapefileError>
+    where R: Clone + Read + Seek,
+{
+    info!("Checking for Files in Archive");
+    let shapefile_names = get_shapefile_names_from_tiger_zipfile(&zip_archive)?;
 
     Ok(
-        TIGERShapefileArchive::<File>{
-            shape_file: shape_file.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Missing .shp file in archive"))?,
-            db_file: db_file.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Missing .dbf file in archive"))?,
-            shapeindex_file: shapeindex_file.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Missing .shx file in archive"))?
-    })
+        TIGERShapefileArchive {
+            shape_file:      copy_into_new_tempfile(zip_archive.clone().by_name(shapefile_names.shp_filename)?)?,
+            db_file:         copy_into_new_tempfile(zip_archive.clone().by_name(shapefile_names.dbf_filename)?)?,
+            shapeindex_file: copy_into_new_tempfile(zip_archive.clone().by_name(shapefile_names.shx_filename)?)?,
+        }
+    )
 }
 
 
@@ -189,8 +229,8 @@ fn extract_shapefiles<'a, R: 'a>(mut zip_archive: ZipArchive<R>) -> Result<TIGER
 /// 
 /// # Errors
 /// 
-pub fn shapefile_reader_from_zip_archive<R>(zip_archive: ZipArchive<R>) -> Result<Reader<impl io::Read>, shapefile::Error> 
-    where R: io::Read + io::Seek,
+pub fn shapefile_reader_from_zip_archive<R>(zip_archive: ZipArchive<R>) -> Result<Reader<impl io::Read>, TIGERShapefileError> 
+    where R: Clone + Read + Seek,
 {
     let tiger_shapefile = extract_shapefiles(zip_archive)?;
     debug!("Creating Reader");
