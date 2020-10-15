@@ -2,7 +2,7 @@ use std::io::{Read, Seek, Cursor};
 use std::collections::HashMap;
 use shapefile::Reader;
 use shapefile::dbase::FieldValue;
-use shapefile::Polygon;
+use shapefile::{Polygon};
 use geo::algorithm::contains::Contains;
 use zip::{ZipArchive, read::ZipFile};
 use std::path::Path;
@@ -126,7 +126,7 @@ pub fn shape_contains_point(shape: &Polygon, point: &geo_types::Point<f64>) -> b
 /// 
 /// assert_eq!(civicsearch::extract_district_name(empty_record), None);
 /// ```
-pub fn extract_district_name(record: HashMap<String, FieldValue>) -> Option<String> {
+pub fn extract_district_name(record: &HashMap<String, FieldValue>) -> Option<String> {
     match record.get("NAMELSAD") {
         Some(FieldValue::Character(Some(n))) => Some(n.clone()),
         _ => None, 
@@ -134,6 +134,7 @@ pub fn extract_district_name(record: HashMap<String, FieldValue>) -> Option<Stri
 }
 
 /// Stores the filenames of relevant data within a TIGER shapefile archive
+#[derive(Debug, Copy, Clone)]
 struct TIGERShapefileArchiveFilenames<'a> {
     shp_filename: &'a str,
     dbf_filename: &'a str,
@@ -148,16 +149,49 @@ fn find_file_in_zipfile_by_extension<'a, R>(zip_archive: &'a ZipArchive<R>, exte
         .filter(|f| {
             Path::new(f)
                 .extension()
-                .and_then(|x| { Some(OsStr::to_string_lossy(x)) })
+                .map(|x| { OsStr::to_string_lossy(x) })
                 .map_or(false, |x| { x == extension})
         })
         .collect::<Vec<&str>>();
     
     if filenames_with_extension.len() > 1 {
-        return Err(TIGERShapefileError::TooManyFiles { extension: String::from(extension) })
+        Err(TIGERShapefileError::TooManyFiles { extension: String::from(extension) })
     } else {
-        return Ok(filenames_with_extension.first().cloned())
+        Ok(filenames_with_extension.first().cloned())
     }
+}
+
+pub struct ShapeWithRecord { 
+    pub shape: Polygon, 
+    pub record: shapefile::dbase::Record, 
+}
+
+struct DistrictWithName<'a> {
+    district: &'a Polygon,
+    name: String
+}
+
+fn find_districts_in_point<'a>(point: &geo_types::Point<f64>, district_map: impl Iterator<Item=&'a DistrictWithName<'a>>) -> Vec<String> {
+    district_map
+        .filter(|dwn| shape_contains_point(&dwn.district, &point))
+        .map(|dwn| dwn.name.clone())
+        .collect()
+}
+
+pub fn find_districts_for_points<'a>(points: impl Iterator<Item=&'a geo_types::Point<f64>>,
+                                 district_map: impl Iterator<Item=&'a ShapeWithRecord>) -> Vec<(&'a geo_types::Point<f64>, Vec<String>)> {
+    let districts_with_name: Vec<DistrictWithName> = district_map
+        .filter_map(|swr| match extract_district_name(&swr.record) {
+            Some(name) => Some(DistrictWithName { district: &swr.shape, name }),
+            None => None
+        })
+        .collect();
+    points
+        .map(|point| {
+            let matching_district_names = find_districts_in_point(point, districts_with_name.iter());
+            (point, matching_district_names)
+        } )
+        .collect()
 }
 
 /// Searches in the zipped TIGER shapefile for relevant files by extension

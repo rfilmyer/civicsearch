@@ -7,11 +7,12 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-geo = "^0.12.0"
-geo-types = "^0.4.3"
-shapefile = { version = "^0.2.0", features = ["geo-types"] }
-zip = "0.5, <0.5.7" # 0.5.8 will fix issue, please check after September 10, 2020
+geo = "0.15.0"
+geo-types = "0.6.0"
+shapefile = { git = "https://github.com/tmontaigu/shapefile-rs.git", features = ["geo-types"] }
+zip = "0.5.8"
 tempfile = "3.1.0"
 log = "^0.4.11"
 env_logger = "^0.7.1"
 thiserror = "1.0"
+num = "0.3"
