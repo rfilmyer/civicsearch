@@ -133,33 +133,6 @@ pub fn extract_district_name(record: &HashMap<String, FieldValue>) -> Option<Str
     }
 }
 
-/// Stores the filenames of relevant data within a TIGER shapefile archive
-#[derive(Debug, Copy, Clone)]
-struct TIGERShapefileArchiveFilenames<'a> {
-    shp_filename: &'a str,
-    dbf_filename: &'a str,
-    shx_filename: &'a str,
-}
-
-
-fn find_file_in_zipfile_by_extension<'a, R>(zip_archive: &'a ZipArchive<R>, extension: &str) -> Result<Option<&'a str>, TIGERShapefileError> 
-    where R: Read + Seek,
-{
-    let filenames_with_extension = zip_archive.file_names()
-        .filter(|f| {
-            Path::new(f)
-                .extension()
-                .map(|x| { OsStr::to_string_lossy(x) })
-                .map_or(false, |x| { x == extension})
-        })
-        .collect::<Vec<&str>>();
-    
-    if filenames_with_extension.len() > 1 {
-        Err(TIGERShapefileError::TooManyFiles { extension: String::from(extension) })
-    } else {
-        Ok(filenames_with_extension.first().cloned())
-    }
-}
 
 
 fn find_districts_in_point<'a>(point: &geo_types::Point<f64>, district_map: impl Iterator<Item=&'a DistrictWithName<'a>>) -> Vec<String> {
@@ -229,58 +202,6 @@ pub fn find_districts_for_points<'a>(points: impl Iterator<Item=&'a geo_types::P
         .collect()
 }
 
-/// Searches in the zipped TIGER shapefile for relevant files by extension
-/// 
-/// There are three files we need from the zipped TIGER shapefile - 
-/// (cf [section 2.2.1 of the TIGER Shapefile technical document](https://www2.census.gov/geo/pdfs/maps-data/data/tiger/tgrshp2019/TGRSHP2019_TechDoc.pdf))
-/// * .shp - the feature geometry
-/// * .shx - the index of the feature geometry
-/// * .dbf - the tabular attribute information
-fn get_shapefile_names_from_tiger_zipfile<R>(zip_archive: &ZipArchive<R>) -> Result<TIGERShapefileArchiveFilenames, TIGERShapefileError> 
-    where R: Read + Seek,
-{
-    Ok(TIGERShapefileArchiveFilenames{
-        shp_filename: find_file_in_zipfile_by_extension(zip_archive, "shp")?
-            .ok_or(TIGERShapefileError::MissingFile { extension: String::from("shp")})?,
-        dbf_filename: find_file_in_zipfile_by_extension(zip_archive, "dbf")?
-            .ok_or(TIGERShapefileError::MissingFile { extension: String::from("dbf")})?,
-        shx_filename: find_file_in_zipfile_by_extension(zip_archive, "shx")?
-        .ok_or(TIGERShapefileError::MissingFile { extension: String::from("shx")})?,
-    })
-}
-
-/// Represents the actual files (or file-like objects) from a zipped TIGER shapefile
-struct TIGERShapefileArchive<T> 
-where T: Read,
-{
-    shape_file:      T,
-    db_file:         T,
-    shapeindex_file: T,
-}
-
-fn extract_file_in_memory(mut zip_file: ZipFile) -> Result<Cursor<Vec<u8>>, TIGERShapefileError> 
-{
-    let mut output_buffer = Vec::new();
-    zip_file.read_to_end(&mut output_buffer)?;
-    Ok(Cursor::new(output_buffer))
-}
-
-fn extract_shapefiles<'a, R: 'a>(zip_archive: ZipArchive<R>) -> Result<TIGERShapefileArchive<Cursor<Vec<u8>>>, TIGERShapefileError>
-    where R: Clone + Read + Seek,
-{
-    info!("Checking for Files in Archive");
-    let shapefile_names = get_shapefile_names_from_tiger_zipfile(&zip_archive)?;
-
-    Ok(
-        TIGERShapefileArchive {
-            shape_file:      extract_file_in_memory(zip_archive.clone().by_name(shapefile_names.shp_filename)?)?,
-            db_file:         extract_file_in_memory(zip_archive.clone().by_name(shapefile_names.dbf_filename)?)?,
-            shapeindex_file: extract_file_in_memory(zip_archive.clone().by_name(shapefile_names.shx_filename)?)?,
-        }
-    )
-}
-
-
 /// Reads a zip archive (a `.zip` file) from TIGER and returns a `shapefile::Reader` to be used for further munging.
 /// 
 /// TIGER shapefiles come in zip archives with a standard format (cf [section 2.2.1 of the TIGER Shapefile technical document](https://www2.census.gov/geo/pdfs/maps-data/data/tiger/tgrshp2019/TGRSHP2019_TechDoc.pdf))  
@@ -321,5 +242,82 @@ pub fn shapefile_reader_from_zip_archive<R>(zip_archive: ZipArchive<R>) -> Resul
 
     Ok(reader)
     
+}
+
+/// Represents the actual files (or file-like objects) from a zipped TIGER shapefile
+struct TIGERShapefileArchive<T> 
+where T: Read,
+{
+    shape_file:      T,
+    db_file:         T,
+    shapeindex_file: T,
+}
+
+fn extract_shapefiles<'a, R: 'a>(zip_archive: ZipArchive<R>) -> Result<TIGERShapefileArchive<Cursor<Vec<u8>>>, TIGERShapefileError>
+    where R: Clone + Read + Seek,
+{
+    info!("Checking for Files in Archive");
+    let shapefile_names = get_shapefile_names_from_tiger_zipfile(&zip_archive)?;
+
+    Ok(
+        TIGERShapefileArchive {
+            shape_file:      extract_file_in_memory(zip_archive.clone().by_name(shapefile_names.shp_filename)?)?,
+            db_file:         extract_file_in_memory(zip_archive.clone().by_name(shapefile_names.dbf_filename)?)?,
+            shapeindex_file: extract_file_in_memory(zip_archive.clone().by_name(shapefile_names.shx_filename)?)?,
+        }
+    )
+}
+
+fn extract_file_in_memory(mut zip_file: ZipFile) -> Result<Cursor<Vec<u8>>, TIGERShapefileError> 
+{
+    let mut output_buffer = Vec::new();
+    zip_file.read_to_end(&mut output_buffer)?;
+    Ok(Cursor::new(output_buffer))
+}
+
+/// Stores the filenames of relevant data within a TIGER shapefile archive
+#[derive(Debug, Copy, Clone)]
+struct TIGERShapefileArchiveFilenames<'a> {
+    shp_filename: &'a str,
+    dbf_filename: &'a str,
+    shx_filename: &'a str,
+}
+
+/// Searches in the zipped TIGER shapefile for relevant files by extension
+/// 
+/// There are three files we need from the zipped TIGER shapefile - 
+/// (cf [section 2.2.1 of the TIGER Shapefile technical document](https://www2.census.gov/geo/pdfs/maps-data/data/tiger/tgrshp2019/TGRSHP2019_TechDoc.pdf))
+/// * .shp - the feature geometry
+/// * .shx - the index of the feature geometry
+/// * .dbf - the tabular attribute information
+fn get_shapefile_names_from_tiger_zipfile<R>(zip_archive: &ZipArchive<R>) -> Result<TIGERShapefileArchiveFilenames, TIGERShapefileError> 
+    where R: Read + Seek,
+{
+    Ok(TIGERShapefileArchiveFilenames{
+        shp_filename: find_file_in_zipfile_by_extension(zip_archive, "shp")?
+            .ok_or(TIGERShapefileError::MissingFile { extension: String::from("shp")})?,
+        dbf_filename: find_file_in_zipfile_by_extension(zip_archive, "dbf")?
+            .ok_or(TIGERShapefileError::MissingFile { extension: String::from("dbf")})?,
+        shx_filename: find_file_in_zipfile_by_extension(zip_archive, "shx")?
+        .ok_or(TIGERShapefileError::MissingFile { extension: String::from("shx")})?,
+    })
+}
+
+fn find_file_in_zipfile_by_extension<'a, R>(zip_archive: &'a ZipArchive<R>, extension: &str) -> Result<Option<&'a str>, TIGERShapefileError> 
+    where R: Read + Seek,
+{
+    let filenames_with_extension = zip_archive.file_names()
+        .filter(|f| {
+            Path::new(f)
+                .extension()
+                .map(|x| { OsStr::to_string_lossy(x) })
+                .map_or(false, |x| { x == extension})
+        })
+        .collect::<Vec<&str>>();
     
+    if filenames_with_extension.len() > 1 {
+        Err(TIGERShapefileError::TooManyFiles { extension: String::from(extension) })
+    } else {
+        Ok(filenames_with_extension.first().cloned())
+    }
 }
