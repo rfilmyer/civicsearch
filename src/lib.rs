@@ -1,7 +1,7 @@
 use std::io::{Read, Seek, Cursor};
 use std::collections::HashMap;
 use shapefile::Reader;
-use shapefile::dbase::FieldValue;
+use shapefile::dbase::{FieldValue, Record};
 use shapefile::{Polygon};
 use geo::algorithm::contains::Contains;
 use zip::{ZipArchive, read::ZipFile};
@@ -101,7 +101,7 @@ pub fn shape_contains_point(shape: &Polygon, point: &geo_types::Point<f64>) -> b
 
 /// Searches a shape's record to find the name of a district.
 /// 
-/// For TIGER shapefiles, district names are stored in the "NAMELSAD" field 
+/// For TIGER shapefiles, district names are stored in the "NAMELSAD" field ("Name of the Legal/Statistical Area Description")
 /// in the `.dbf` database stored with a .shp shapefile.
 /// 
 /// # Examples
@@ -116,7 +116,7 @@ pub fn shape_contains_point(shape: &Polygon, point: &geo_types::Point<f64>) -> b
 ///         Some(String::from("1st District")))
 /// );
 /// 
-/// assert_eq!(civicsearch::extract_district_name(record), Some(String::from("1st District")));
+/// assert_eq!(civicsearch::extract_district_name(&record), Some(String::from("1st District")));
 /// ```
 /// 
 /// ```
@@ -124,7 +124,7 @@ pub fn shape_contains_point(shape: &Polygon, point: &geo_types::Point<f64>) -> b
 /// 
 /// let mut empty_record = HashMap::new();
 /// 
-/// assert_eq!(civicsearch::extract_district_name(empty_record), None);
+/// assert_eq!(civicsearch::extract_district_name(&empty_record), None);
 /// ```
 pub fn extract_district_name(record: &HashMap<String, FieldValue>) -> Option<String> {
     match record.get("NAMELSAD") {
@@ -141,7 +141,7 @@ struct TIGERShapefileArchiveFilenames<'a> {
     shx_filename: &'a str,
 }
 
-/// 
+
 fn find_file_in_zipfile_by_extension<'a, R>(zip_archive: &'a ZipArchive<R>, extension: &str) -> Result<Option<&'a str>, TIGERShapefileError> 
     where R: Read + Seek,
 {
@@ -161,15 +161,6 @@ fn find_file_in_zipfile_by_extension<'a, R>(zip_archive: &'a ZipArchive<R>, exte
     }
 }
 
-pub struct ShapeWithRecord { 
-    pub shape: Polygon, 
-    pub record: shapefile::dbase::Record, 
-}
-
-struct DistrictWithName<'a> {
-    district: &'a Polygon,
-    name: String
-}
 
 fn find_districts_in_point<'a>(point: &geo_types::Point<f64>, district_map: impl Iterator<Item=&'a DistrictWithName<'a>>) -> Vec<String> {
     district_map
@@ -178,11 +169,55 @@ fn find_districts_in_point<'a>(point: &geo_types::Point<f64>, district_map: impl
         .collect()
 }
 
+struct DistrictWithName<'a> {
+    district: &'a Polygon,
+    name: String
+}
+
+/// Generate a list of names of districts for a collection of points.
+/// 
+/// This function takes a list of points and a list of polygon-record pairs (districts), finds the districts containing each point, and 
+/// returns a list of points with the names of those containing districts. 
+/// 
+/// # Examples
+/// 
+/// TODO: Fix the type conversion issues here
+/// ```
+/// use shapefile::{Polygon, PolygonRing, Point};
+/// 
+/// let simple_polygon = Polygon::new(PolygonRing::Outer(vec![
+///     Point::new(-1.1,-1.01),
+///     Point::new(-1.2, 1.02),
+///     Point::new( 1.3, 1.03),
+///     Point::new( 1.4,-1.04),
+/// ]));
+/// 
+/// use std::collections::HashMap;
+/// use shapefile::dbase::FieldValue;
+/// let mut record = HashMap::new(); 
+/// record.insert(String::from("NAMELSAD"), 
+/// FieldValue::Character(
+///     Some(String::from("1st District")))
+/// );
+/// 
+/// let shapes_with_records = vec![(simple_polygon, record)];
+/// 
+/// let point_inside  = Point::new(0.0, 0.0);
+/// let point_outside = Point::new(5.0, 5.0);
+/// 
+/// 
+/// let points = vec![point_inside, point_outside];
+/// 
+/// 
+/// assert_eq!(civicsearch::find_districts_for_points(points.iter(), shapes_with_records.iter()), 
+///            vec![(&point_inside, vec![String::from("1st District")])]);
+/// 
+/// ```
 pub fn find_districts_for_points<'a>(points: impl Iterator<Item=&'a geo_types::Point<f64>>,
-                                 district_map: impl Iterator<Item=&'a ShapeWithRecord>) -> Vec<(&'a geo_types::Point<f64>, Vec<String>)> {
+                                 district_map: impl Iterator<Item=&'a (Polygon, Record)>) -> Vec<(&'a geo_types::Point<f64>, Vec<String>)> {
     let districts_with_name: Vec<DistrictWithName> = district_map
-        .filter_map(|swr| match extract_district_name(&swr.record) {
-            Some(name) => Some(DistrictWithName { district: &swr.shape, name }),
+        .filter_map(|(shape, record)| match extract_district_name(&record) {
+            Some(name) => Some(DistrictWithName { district: &shape, name }),
             None => None
         })
         .collect();

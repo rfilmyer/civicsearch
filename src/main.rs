@@ -24,11 +24,10 @@ fn main() {
         geo_types::point!(x: -71.0374142, y: 42.3669590), // KO Meat Pies, 1st Suffolk
     );
 
-    let district_map: Vec<civicsearch::ShapeWithRecord> = reader
+    let district_map: Vec<(Polygon, shapefile::dbase::Record)> = reader
         .iter_shapes_and_records_as::<Polygon>()
         .unwrap_or_else(|err| { error!("Could not read shapefile data: {:?}", err); process::exit(1)})
         .flat_map(|sr| sr.ok())
-        .map(|(shape, record)| civicsearch::ShapeWithRecord { shape, record })
         .collect();
     let points_with_districts = civicsearch::find_districts_for_points(points.iter(), district_map.iter());
 
