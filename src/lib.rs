@@ -1,15 +1,16 @@
-use std::io::{Read, Seek, Cursor};
-use std::collections::HashMap;
 use shapefile::Reader;
 use shapefile::dbase::{FieldValue, Record};
+use std::collections::HashMap;
+
 use shapefile::{Polygon};
 use geo::algorithm::contains::Contains;
+
 use zip::{ZipArchive, read::ZipFile};
+use std::io::{Read, Seek, Cursor};
 use std::path::Path;
 use std::ffi::OsStr;
 
 use log::{debug, info};
-
 use thiserror::Error;
 
 /// Errors that can occur when reading TIGER shapefiles
@@ -310,8 +311,8 @@ fn find_file_in_zipfile_by_extension<'a, R>(zip_archive: &'a ZipArchive<R>, exte
         .filter(|f| {
             Path::new(f)
                 .extension()
-                .map(|x| { OsStr::to_string_lossy(x) })
-                .map_or(false, |x| { x == extension})
+                // .map(|x| { OsStr::to_string_lossy(x) })
+                .map_or(false, |x| { x == OsStr::new(extension)})
         })
         .collect::<Vec<&str>>();
     
@@ -321,3 +322,4 @@ fn find_file_in_zipfile_by_extension<'a, R>(zip_archive: &'a ZipArchive<R>, exte
         Ok(filenames_with_extension.first().cloned())
     }
 }
+

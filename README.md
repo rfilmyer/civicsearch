@@ -2,13 +2,19 @@
 A tool to get state legislative districts from latitude/longitude points on a map.
 
 ## Current State
+* Under active developent, but as of 0.2.0 this tool should be usable.
+* `civicsearch` is now a command line tool.
 
-* It works?
-* A command line tool that determines the legislative district for a hardcoded point.
+### How to use
+Run on the command line.
 
-## Vision
-This will be an interactive tool. It should:
+* Get help with `./civicsearch --help` (or `./civicsearch.exe --help` on Windows)
+* Supply a CSV file with 2 columns - `latitude` and `longitude` with `--input`
+* Supply a ZIP file from [TIGER](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html) with `--shapefile`.
 
-* Have a more user-friendly frontend; either wasm, electron, or a native app.
-* Ingest data via a specially-formatted csv, or excel spreadsheet.
-* Ingest shapefiles from [TIGER](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html), either as a `.zip` or as the three important files contained in the `.zip` - the `.shp` (holding shapes), the `.dbf` (holding metadata like district names), and the `.shx` (an index file connecting the other two).
+Example:
+`civicsearch.exe --input example_locations.csv --shapefile .\tl_2019_25_sldl.zip`
+
+## Future
+
+Although `civicsearch` currently works on the command line, I believe I can repurpose this tool to work on a static webpage using webassembly. Stay tuned! Should be much more user-friendly when I get that done.
