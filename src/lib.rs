@@ -37,7 +37,7 @@ pub enum TIGERShapefileError {
     #[error("error processing shapefile")]
     InvalidShapefile(#[from] shapefile::Error),
 
-    /// There was some kind of IO error (likely in `.zip` extraction)
+    /// There was some kind of IO error- (likely in `.zip` extraction)
     #[error("IO Error")]
     Io(#[from] std::io::Error),
 }
@@ -135,14 +135,14 @@ pub fn extract_district_name(record: &HashMap<String, FieldValue>) -> Option<Str
 }
 
 
-
+/// Look through a collection of districts to find the ones that contain `point`, returning their names.
 fn find_districts_in_point<'a>(point: &geo_types::Point<f64>, district_map: impl Iterator<Item=&'a DistrictWithName<'a>>) -> Vec<String> {
     district_map
         .filter(|dwn| shape_contains_point(&dwn.district, &point))
         .map(|dwn| dwn.name.clone())
         .collect()
 }
-
+/// Helper struct to store the geographic shape of a district with its human-readable name
 struct DistrictWithName<'a> {
     district: &'a Polygon,
     name: String
@@ -311,7 +311,6 @@ fn find_file_in_zipfile_by_extension<'a, R>(zip_archive: &'a ZipArchive<R>, exte
         .filter(|f| {
             Path::new(f)
                 .extension()
-                // .map(|x| { OsStr::to_string_lossy(x) })
                 .map_or(false, |x| { x == OsStr::new(extension)})
         })
         .collect::<Vec<&str>>();

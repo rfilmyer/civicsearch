@@ -1,6 +1,6 @@
 [package]
 name = "civicsearch"
-version = "0.2.0"
+version = "0.2.1"
 description = "CLI utility looking up legislative districts for latitude/longitude coordinates."
 authors = ["Roger Filmyer"]
 edition = "2018"
@@ -10,7 +10,7 @@ edition = "2018"
 [dependencies]
 geo = "0.15.0"
 geo-types = "0.6.0"
-shapefile = { git = "https://github.com/tmontaigu/shapefile-rs.git", features = ["geo-types"] }
+shapefile = { version = "0.2.1", features = ["geo-types"] }
 zip = "0.5.8"
 tempfile = "3.1.0"
 log = "^0.4.11"

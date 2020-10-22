@@ -14,6 +14,8 @@ Run on the command line.
 
 Example:
 `civicsearch.exe --input example_locations.csv --shapefile .\tl_2019_25_sldl.zip`
+On Linux:
+`civicsearch --input example_locations.csv --shapefile tl_2019_25_sldl.zip`
 
 ## Future
 
