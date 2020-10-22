@@ -4,6 +4,7 @@ A tool to get state legislative districts from latitude/longitude points on a ma
 ## Current State
 * Under active developent, but as of 0.2.0 this tool should be usable.
 * `civicsearch` is now a command line tool.
+* Downloads available at the [Releases](https://github.com/rfilmyer/civicsearch/releases/) page.
 
 ### How to use
 Run on the command line.
